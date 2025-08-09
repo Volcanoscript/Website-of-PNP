@@ -1,53 +1,14 @@
-# app.py
-"""
-Single-file PNP roster web app for Render deployment.
-
-Files required in repo:
-- app.py  (this file)
-- requirements.txt  (see below)
-- Procfile (optional, see below)
-
-Run:
-- Locally: python app.py
-- Render: use start command `gunicorn app:app`
-"""
-
-import os
-import json
-import time
-import threading
-from datetime import datetime, timezone
-from pathlib import Path
-from functools import wraps
-
+from flask import Flask, request, redirect, session
 import requests
-from flask import (
-    Flask,
-    render_template_string,
-    request,
-    redirect,
-    url_for,
-    session,
-    jsonify,
-    flash,
-)
 
-# ---------------- Config ----------------
-APP_DIR = Path(__file__).parent
-DATA_FILE = APP_DIR / "players.json"
+app = Flask(__name__)
+app.secret_key = "supersecretkey"
 
-# Avatar cache settings
-AVATAR_TTL = int(os.getenv("AVATAR_TTL", 60 * 60))  # 1 hour
-AVATAR_CLEAN_INTERVAL = int(os.getenv("AVATAR_CLEAN_INTERVAL", 300))  # 5 minutes
-AVATAR_SIZE = os.getenv("AVATAR_SIZE", "150x150")
+# --- Admin credentials ---
+ADMIN_USER = "admin"
+ADMIN_PASS = "PNP2025"
 
-# Admin credentials (defaults)
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "PNP2025")
-SECRET_KEY = os.getenv("SECRET_KEY") or os.urandom(24)
-PORT = int(os.getenv("PORT", 5000))
-
-# PNP ranks (lowest -> highest)
+# --- PNP Ranks ---
 PNP_RANKS = [
     "Patrolman/Patrolwoman",
     "Police Corporal",
@@ -64,45 +25,100 @@ PNP_RANKS = [
     "Police Brigadier General",
     "Police Major General",
     "Police Lieutenant General",
-    "Police General",
+    "Police General"
 ]
 
-# Roblox endpoints
-ROBLOX_USERNAME_ENDPOINT = "https://users.roblox.com/v1/usernames/users"
-ROBLOX_THUMBNAIL_ENDPOINT = "https://thumbnails.roblox.com/v1/users/avatar-headshot"
+# store player ranks in memory
+player_ranks = {}
 
-# ---------------- Flask app ----------------
-app = Flask(__name__)
-app.secret_key = SECRET_KEY
+# --- Homepage / Login ---
+@app.route("/", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        if username == ADMIN_USER and password == ADMIN_PASS:
+            session["admin"] = True
+            return redirect("/dashboard")
+        else:
+            return "<h2>Invalid credentials</h2><a href='/'>Try again</a>"
 
-# ---------------- Persistence helpers ----------------
-_lock = threading.Lock()
+    return """
+    <h1>PNP Admin Login</h1>
+    <form method='POST'>
+        Username: <input type='text' name='username'><br>
+        Password: <input type='password' name='password'><br>
+        <input type='submit' value='Login'>
+    </form>
+    """
 
+# --- Dashboard ---
+@app.route("/dashboard", methods=["GET", "POST"])
+def dashboard():
+    if not session.get("admin"):
+        return redirect("/")
 
-def ensure_datafile():
-    if not DATA_FILE.exists():
-        DATA_FILE.write_text(json.dumps({"members": [], "logs": []}, indent=2), encoding="utf-8")
+    message = ""
+    if request.method == "POST":
+        action = request.form.get("action")
+        username = request.form.get("player")
+        if action == "add":
+            player_ranks[username] = PNP_RANKS[0]
+            message = f"Added {username} with rank {PNP_RANKS[0]}"
+        elif action == "promote":
+            current_rank = player_ranks.get(username)
+            if current_rank and PNP_RANKS.index(current_rank) < len(PNP_RANKS) - 1:
+                new_rank = PNP_RANKS[PNP_RANKS.index(current_rank) + 1]
+                player_ranks[username] = new_rank
+                message = f"Promoted {username} to {new_rank}"
+        elif action == "demote":
+            current_rank = player_ranks.get(username)
+            if current_rank and PNP_RANKS.index(current_rank) > 0:
+                new_rank = PNP_RANKS[PNP_RANKS.index(current_rank) - 1]
+                player_ranks[username] = new_rank
+                message = f"Demoted {username} to {new_rank}"
+        elif action == "delete":
+            if username in player_ranks:
+                del player_ranks[username]
+                message = f"Deleted {username}"
 
+    # Roblox avatar fetch
+    avatar_html = ""
+    for player in player_ranks:
+        try:
+            res = requests.get(f"https://api.roblox.com/users/get-by-username?username={player}").json()
+            if "Id" in res and res["Id"] != 0:
+                user_id = res["Id"]
+                avatar_html += f"<p>{player} - {player_ranks[player]}</p>"
+                avatar_html += f"<img src='https://www.roblox.com/headshot-thumbnail/image?userId={user_id}&width=150&height=150&format=png'><br>"
+            else:
+                avatar_html += f"<p>{player} - {player_ranks[player]} (Roblox user not found)</p>"
+        except:
+            avatar_html += f"<p>{player} - {player_ranks[player]} (Error fetching avatar)</p>"
 
-def read_data():
-    ensure_datafile()
-    with _lock:
-        return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    return f"""
+    <h1>PNP Admin Dashboard</h1>
+    <p style='color:green;'>{message}</p>
+    <form method='POST'>
+        Roblox Username: <input type='text' name='player'><br>
+        <button name='action' value='add'>Add</button>
+        <button name='action' value='promote'>Promote</button>
+        <button name='action' value='demote'>Demote</button>
+        <button name='action' value='delete'>Delete</button>
+    </form>
+    <h2>Current Players</h2>
+    {avatar_html}
+    <br><a href='/logout'>Logout</a>
+    """
 
+# --- Logout ---
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
 
-def write_data(data):
-    with _lock:
-        tmp = DATA_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        tmp.replace(DATA_FILE)
-
-
-# ---------------- Avatar cache ----------------
-_avatar_cache = {}
-_avatar_lock = threading.Lock()
-
-
-def avatar_get(username):
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)def avatar_get(username):
     key = (username or "").lower()
     now = time.time()
     with _avatar_lock:
