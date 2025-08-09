@@ -1,37 +1,10 @@
-import os
-import json
-import time
-import threading
-from datetime import datetime
-from functools import wraps
-from pathlib import Path
+from flask import Flask, render_template, request, redirect, url_for
 
-import requests
-from flask import (
-    Flask, render_template, request, redirect, url_for, session, jsonify, abort, flash
-)
+app = Flask(__name__)
 
-# -------------------------
-# CONFIG
-# -------------------------
-APP_DIR = Path(__file__).parent
-DATA_FILE = APP_DIR / "data.json"
-AVATAR_TTL = 60 * 60  # 1 hour
-AVATAR_SIZE = os.getenv("AVATAR_SIZE", "150x150")
-
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "PNP2025")
-SECRET_KEY = os.getenv("SECRET_KEY", None) or os.urandom(24)
-
-app = Flask(__name__, template_folder="templates", static_folder="static")
-app.secret_key = SECRET_KEY
-
-# -------------------------
-# PNP Rank Order (lowest -> highest)
-# The index is used in stored members as rank_index.
-# -------------------------
+# All PNP ranks
 PNP_RANKS = [
-    # PNCOs (lower)
+    # PNCOs
     "Patrolman/Patrolwoman",
     "Police Corporal",
     "Police Staff Sergeant",
@@ -39,7 +12,7 @@ PNP_RANKS = [
     "Police Senior Master Sergeant",
     "Police Chief Master Sergeant",
     "Police Executive Master Sergeant",
-    # PCOs (higher)
+    # PCOs
     "Police Lieutenant",
     "Police Captain",
     "Police Major",
@@ -51,58 +24,49 @@ PNP_RANKS = [
     "Police General"
 ]
 
-# -------------------------
-# Simple file-based storage
-# -------------------------
-LOCK = threading.Lock()
+# Sample officers (username, rank_index)
+officers = [
+    {"username": "JuanDelaCruz", "rank": 0},
+    {"username": "MariaSantos", "rank": 2}
+]
 
+@app.route("/")
+def index():
+    return render_template("roster.html", officers=officers, ranks=PNP_RANKS)
 
-def read_data():
-    if not DATA_FILE.exists():
-        # create with empty structure
-        DATA_FILE.write_text(json.dumps({"members": [], "logs": []}, indent=2))
-    with LOCK:
-        return json.loads(DATA_FILE.read_text())
+@app.route("/promote/<username>")
+def promote(username):
+    for officer in officers:
+        if officer["username"] == username:
+            if officer["rank"] < len(PNP_RANKS) - 1:
+                officer["rank"] += 1
+            break
+    return redirect(url_for("index"))
 
+@app.route("/demote/<username>")
+def demote(username):
+    for officer in officers:
+        if officer["username"] == username:
+            if officer["rank"] > 0:
+                officer["rank"] -= 1
+            break
+    return redirect(url_for("index"))
 
-def write_data(data):
-    with LOCK:
-        tmp = DATA_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        tmp.replace(DATA_FILE)
+@app.route("/add", methods=["POST"])
+def add_officer():
+    username = request.form["username"]
+    if username:
+        officers.append({"username": username, "rank": 0})
+    return redirect(url_for("index"))
 
+@app.route("/delete/<username>")
+def delete_officer(username):
+    global officers
+    officers = [o for o in officers if o["username"] != username]
+    return redirect(url_for("index"))
 
-# -------------------------
-# Avatar cache (in-memory)
-# -------------------------
-avatar_cache = {}
-avatar_lock = threading.Lock()
-
-
-def avatar_get(username):
-    key = (username or "").lower()
-    now = time.time()
-    with avatar_lock:
-        v = avatar_cache.get(key)
-        if v and v["expiry"] > now:
-            return v["url"]
-    return None
-
-
-def avatar_set(username, url):
-    key = (username or "").lower()
-    with avatar_lock:
-        avatar_cache[key] = {"url": url, "expiry": time.time() + AVATAR_TTL}
-
-
-def avatar_cleaner():
-    while True:
-        time.sleep(300)
-        now = time.time()
-        with avatar_lock:
-            remove = [k for k, v in avatar_cache.items() if v["expiry"] <= now]
-            for k in remove:
-                del avatar_cache[k]
+if __name__ == "__main__":
+    app.run(debug=True)                del avatar_cache[k]
 
 
 threading.Thread(target=avatar_cleaner, daemon=True).start()
