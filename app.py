@@ -1,108 +1,64 @@
-from flask import Flask, render_template, request, jsonify
-import requests
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from admin_tools import get_rank_for_user, set_rank_for_user, promote_user, demote_user, delete_user, add_user
+from avatar_live import get_avatar_url
 
 app = Flask(__name__)
+CORS(app)
 
-# Sample PNP Ranks
-PNP_RANKS = [
-    # PNCOs
-    "Patrolman/Patrolwoman",
-    "Police Corporal",
-    "Police Staff Sergeant",
-    "Police Master Sergeant",
-    "Police Senior Master Sergeant",
-    "Police Chief Master Sergeant",
-    "Police Executive Master Sergeant",
-    # PCOs
-    "Police Lieutenant",
-    "Police Captain",
-    "Police Major",
-    "Police Lieutenant Colonel",
-    "Police Colonel",
-    "Police Brigadier General",
-    "Police Major General",
-    "Police Lieutenant General",
-    "Police General"
-]
-
-# Player database in memory
-players = {}  # username -> {rank, avatar_url}
-
-# Admin credentials (simple for demo)
-ADMIN_USER = "admin"
-ADMIN_PASS = "password123"
-
-# Roblox avatar API
-def get_roblox_avatar(username):
-    try:
-        # Get userId from username
-        user_res = requests.get(
-            f"https://api.roblox.com/users/get-by-username?username={username}"
-        ).json()
-        if "Id" not in user_res or user_res["Id"] == -1:
-            return None
-        user_id = user_res["Id"]
-
-        # Get avatar thumbnail
-        avatar_res = requests.get(
-            f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size=150x150&format=Png"
-        ).json()
-        if avatar_res.get("data") and len(avatar_res["data"]) > 0:
-            return avatar_res["data"][0]["imageUrl"]
-        return None
-    except:
-        return None
+# Store player ranks in memory
+player_ranks = {}
 
 @app.route("/")
-def index():
-    return render_template("index.html", players=players, ranks=PNP_RANKS)
+def home():
+    return jsonify({"status": "online", "message": "PNP Rank & Avatar API is running"})
 
-@app.route("/login", methods=["POST"])
-def login():
-    data = request.json
-    if data["username"] == ADMIN_USER and data["password"] == ADMIN_PASS:
-        return jsonify({"success": True})
-    return jsonify({"success": False, "message": "Invalid credentials"})
+@app.route("/get_rank/<username>", methods=["GET"])
+def get_rank(username):
+    rank = player_ranks.get(username) or get_rank_for_user(username)
+    return jsonify({"username": username, "rank": rank})
 
-@app.route("/add_player", methods=["POST"])
-def add_player():
+@app.route("/set_rank", methods=["POST"])
+def set_rank():
     data = request.json
-    username = data["username"]
-    rank = data["rank"]
-    avatar_url = get_roblox_avatar(username) or "https://via.placeholder.com/150"
-    players[username] = {"rank": rank, "avatar_url": avatar_url}
-    return jsonify({"success": True, "players": players})
+    username = data.get("username")
+    rank = data.get("rank")
+    if not username or not rank:
+        return jsonify({"error": "username and rank required"}), 400
+    player_ranks[username] = rank
+    set_rank_for_user(username, rank)
+    return jsonify({"message": f"Rank for {username} set to {rank}"})
 
-@app.route("/promote", methods=["POST"])
-def promote():
-    data = request.json
-    username = data["username"]
-    if username in players:
-        current_rank = players[username]["rank"]
-        if current_rank in PNP_RANKS:
-            idx = PNP_RANKS.index(current_rank)
-            if idx < len(PNP_RANKS) - 1:
-                players[username]["rank"] = PNP_RANKS[idx + 1]
-    return jsonify(players)
+@app.route("/promote/<username>", methods=["POST"])
+def promote(username):
+    result = promote_user(username)
+    return jsonify({"message": result})
 
-@app.route("/demote", methods=["POST"])
-def demote():
-    data = request.json
-    username = data["username"]
-    if username in players:
-        current_rank = players[username]["rank"]
-        if current_rank in PNP_RANKS:
-            idx = PNP_RANKS.index(current_rank)
-            if idx > 0:
-                players[username]["rank"] = PNP_RANKS[idx - 1]
-    return jsonify(players)
+@app.route("/demote/<username>", methods=["POST"])
+def demote(username):
+    result = demote_user(username)
+    return jsonify({"message": result})
 
-@app.route("/delete", methods=["POST"])
-def delete():
+@app.route("/delete/<username>", methods=["DELETE"])
+def delete(username):
+    result = delete_user(username)
+    return jsonify({"message": result})
+
+@app.route("/add", methods=["POST"])
+def add():
     data = request.json
-    username = data["username"]
-    if username in players:
-        del players[username]
+    username = data.get("username")
+    rank = data.get("rank")
+    result = add_user(username, rank)
+    return jsonify({"message": result})
+
+@app.route("/avatar/<username>", methods=["GET"])
+def avatar(username):
+    url = get_avatar_url(username)
+    return jsonify({"username": username, "avatar_url": url})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)        del players[username]
     return jsonify(players)
 
 if __name__ == "__main__":
