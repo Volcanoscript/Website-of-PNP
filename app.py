@@ -1,18 +1,37 @@
 #!/usr/bin/env python3
+"""
+Render-ready single-file PNP roster app with Roblox avatars and admin login.
+
+Admin credentials (default):
+  username: admin
+  password: PNP2025
+
+Requirements:
+  - flask
+  - requests
+  - gunicorn (for production on Render)
+
+Start locally:
+  python app.py
+
+Start on Render (recommended start command):
+  gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT
+"""
+
 import os
 import uuid
 import json
 import datetime
-import requests
 from functools import wraps
-from flask import Flask, request, render_template_string, redirect, url_for, session, jsonify
-from flask_cors import CORS
 
-# ---------- Config ----------
+from flask import Flask, request, render_template_string, redirect, url_for, session, jsonify
+import requests
+
+# ---------- Configuration ----------
 PORT = int(os.environ.get("PORT", 5000))
-ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASS = os.environ.get("ADMIN_PASS", "PNP2025")
-SECRET_KEY = os.environ.get("SECRET_KEY", "change_this_secret")
+ADMIN_USER = os.environ.get("ADMIN_USER", "admin")   # default admin
+ADMIN_PASS = os.environ.get("ADMIN_PASS", "PNP2025") # default password
+SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24).hex())
 DATA_FILE = os.environ.get("DATA_FILE", "data.json")
 ROBLOX_TIMEOUT = 6  # seconds
 
@@ -44,13 +63,13 @@ RANK_CODES = {r[0]: r[1] for r in PNP_RANKS}
 # ---------- Flask app ----------
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
-CORS(app)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 
 # ---------- Persistence ----------
 def load_data():
     if not os.path.exists(DATA_FILE):
-        # create file with sample members
+        # initial sample members similar to your screenshot
         sample = [
             {
                 "id": str(uuid.uuid4()),
@@ -65,6 +84,22 @@ def load_data():
                 "username": "SquadLeader59",
                 "display_name": "",
                 "rank": "Police Staff Sergeant",
+                "avatar_url": "",
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "username": "BuliderMaster",
+                "display_name": "",
+                "rank": "Police Master Sergeant",
+                "avatar_url": "",
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "username": "OfficerRamos",
+                "display_name": "",
+                "rank": "Police Captain",
                 "avatar_url": "",
                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             },
@@ -87,6 +122,7 @@ def save_data(data):
 
 # ---------- Roblox avatar helpers ----------
 def fetch_user_id(username: str):
+    """Return Roblox userId for given username, or None."""
     if not username:
         return None
     try:
@@ -95,12 +131,17 @@ def fetch_user_id(username: str):
         if r.status_code != 200:
             return None
         j = r.json()
-        return j.get("Id") or j.get("id")
+        uid = j.get("Id") or j.get("id")
+        # some responses return -1 for not found
+        if isinstance(uid, int) and uid <= 0:
+            return None
+        return uid
     except Exception:
         return None
 
 
 def fetch_avatar_by_userid(user_id):
+    """Get Roblox avatar thumbnail URL by user id via thumbnails.roblox.com."""
     try:
         if not user_id:
             return ""
@@ -125,7 +166,7 @@ def fetch_avatar_by_username(username: str):
     return fetch_avatar_by_userid(uid)
 
 
-# ---------- Helpers ----------
+# ---------- Utilities ----------
 def find_member(data, member_id):
     for m in data:
         if m.get("id") == member_id:
@@ -149,10 +190,10 @@ def admin_required(f):
     return wrapped
 
 
-# ---------- Templates (inline) ----------
+# ---------- Templates (keeps your UI) ----------
 INDEX_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PPNP Roster</title>
+<title>PROBISYA ROLEPLAY CITY — PNP ROSTER</title>
 <style>
 :root{--bg:#06101a;--card:#0b1217;--accent:#f5c153;--muted:#9aa6b0}
 body{margin:0;font-family:Inter,system-ui,Arial;background:var(--bg);color:#e6eef8}
@@ -292,7 +333,7 @@ button{width:100%;padding:10px;border-radius:6px;border:none;background:#f59e0b;
 # ---------- Routes ----------
 @app.route("/", methods=["GET"])
 def index():
-    # load and attempt to fill missing avatars (once)
+    # try to fill missing avatars once then show page
     data = load_data()
     updated = False
     for m in data:
@@ -308,12 +349,9 @@ def index():
     grouped = {r: [] for r in RANK_NAMES}
     for m in data:
         grouped.setdefault(m.get("rank"), []).append(m)
-
-    # sort each group's members by created_at
     for k in grouped:
         grouped[k] = sorted(grouped[k], key=lambda x: x.get("created_at", ""))
 
-    # counts
     counts = {r: len(grouped.get(r, [])) for r in RANK_NAMES}
 
     return render_template_string(
@@ -437,7 +475,7 @@ def api_roster():
 
 # ---------- Run ----------
 if __name__ == "__main__":
-    # fill missing avatars on first start (non-blocking simple approach)
+    # fill missing avatars on first start
     data_now = load_data()
     updated = False
     for m in data_now:
