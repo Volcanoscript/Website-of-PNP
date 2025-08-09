@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PNP Roster</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <h1>PROBISYA — PNP Roster</h1>
+
+    <section class="panel">
+      <h3>Add new member</h3>
+      <form method="post" action="{{ url_for('add_player') }}">
+        <input name="username" placeholder="Roblox username" required>
+        <select name="rank">
+          {% for r in ranks %}
+            <option value="{{ r }}">{{ r }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary">Add member</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h3>Promote / Demote / Delete</h3>
+      <form method="post" action="{{ url_for('promote') }}" style="display:inline-block;margin-right:8px;">
+        <input name="username" placeholder="Username" required>
+        <button type="submit" class="btn btn-primary">Promote</button>
+      </form>
+
+      <form method="post" action="{{ url_for('demote') }}" style="display:inline-block;margin-right:8px;">
+        <input name="username" placeholder="Username" required>
+        <button type="submit" class="btn btn-ghost">Demote</button>
+      </form>
+
+      <form method="post" action="{{ url_for('delete') }}" style="display:inline-block;">
+        <input name="username" placeholder="Username" required>
+        <button type="submit" class="btn danger" onclick="return confirm('Delete this user?')">Delete</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h3>Members</h3>
+      <div class="grid">
+        {% for name, info in players.items() %}
+          <div class="card">
+            <div class="avatar">
+              {% if info.avatar %}
+                <img src="{{ info.avatar }}" alt="avatar">
+              {% else %}
+                <div class="avatar-placeholder"></div>
+              {% endif %}
+            </div>
+            <div class="meta">
+              <div class="rank">{{ info.rank }}</div>
+              <div class="username">{{ name }}</div>
+            </div>
+          </div>
+        {% else %}
+          <p>No members yet.</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div style="margin-top:18px;color:#999">Note: data is stored in memory (resets on restart).</div>
+  </div>
+</body>
+  </html>
