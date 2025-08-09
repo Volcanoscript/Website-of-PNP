@@ -1,116 +1,116 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session
-import json
+from flask import Flask, request, redirect, url_for, render_template_string
 import requests
-import os
 
 app = Flask(__name__)
-app.secret_key = "super_secret_key_here"
 
-DATA_FILE = "data.json"
+# Simple in-memory rank storage
+users = {}
 ADMIN_PASSWORD = "PNP2025"
 
 # HTML Template
-template = """
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Probisya Roleplay City</title>
-    <style>
-        body { font-family: Arial; background: #111; color: white; text-align: center; }
-        .member { display: inline-block; background: #222; padding: 15px; margin: 10px; border-radius: 10px; }
-        img { border-radius: 50%; }
-        input, button { padding: 5px; margin: 5px; }
-    </style>
+    <title>PNP Admin Panel</title>
 </head>
-<body>
-    {% if not session.get('admin') %}
-        <h2>Admin Login</h2>
-        <form method="POST" action="{{ url_for('login') }}">
-            <input type="password" name="password" placeholder="Enter password" required>
+<body style="font-family: Arial; text-align: center;">
+    <h1>PNP Admin Panel</h1>
+
+    {% if not logged_in %}
+        <form method="post" action="/login">
+            <input type="password" name="password" placeholder="Enter Admin Password">
             <button type="submit">Login</button>
         </form>
     {% else %}
-        <h1>Probisya Roleplay City — Roster</h1>
-        <form method="POST" action="{{ url_for('add_member') }}">
-            <input type="text" name="username" placeholder="Roblox username" required>
-            <input type="text" name="rank" placeholder="Rank" required>
-            <button type="submit">Add</button>
+        <h2>Welcome, Admin!</h2>
+        <form method="post" action="/add_user">
+            <input type="text" name="username" placeholder="Roblox Username" required>
+            <select name="rank">
+                <option value="Patrol">Patrol</option>
+                <option value="Sergeant">Sergeant</option>
+                <option value="Captain">Captain</option>
+            </select>
+            <button type="submit">Add User</button>
         </form>
-        <div>
-            {% for member in roster %}
-                <div class="member">
-                    <img src="{{ member.avatar }}" width="150" height="150"><br>
-                    <b>{{ member.rank }}</b><br>
-                    {{ member.username }}<br>
-                    <a href="{{ url_for('delete_member', username=member.username) }}" style="color:red;">Delete</a>
-                </div>
+        
+        <h3>Current Members</h3>
+        <table border="1" style="margin: auto;">
+            <tr><th>Avatar</th><th>Username</th><th>Rank</th><th>Actions</th></tr>
+            {% for username, rank in users.items() %}
+            <tr>
+                <td><img src="{{ avatars[username] }}" width="100"></td>
+                <td>{{ username }}</td>
+                <td>{{ rank }}</td>
+                <td>
+                    <a href="/promote/{{ username }}">Promote</a> | 
+                    <a href="/demote/{{ username }}">Demote</a>
+                </td>
+            </tr>
             {% endfor %}
-        </div>
+        </table>
+        <br>
+        <a href="/logout">Logout</a>
     {% endif %}
 </body>
 </html>
 """
 
-# Load data
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w") as f:
-            json.dump([], f)
-    with open(DATA_FILE) as f:
-        return json.load(f)
+# Session simulation
+session_state = {"logged_in": False}
 
-# Save data
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+def get_roblox_avatar(username):
+    try:
+        resp = requests.get(f"https://api.roblox.com/users/get-by-username?username={username}").json()
+        if "Id" in resp:
+            user_id = resp["Id"]
+            avatar_url = f"https://www.roblox.com/headshot-thumbnail/image?userId={user_id}&width=150&height=150&format=png"
+            return avatar_url
+    except:
+        pass
+    return "https://via.placeholder.com/150"
 
-# Get Roblox userId
-def get_user_id(username):
-    url = f"https://api.roblox.com/users/get-by-username?username={username}"
-    r = requests.get(url)
-    data = r.json()
-    return data.get("Id")
-
-# Get Roblox avatar
-def get_avatar(user_id):
-    return f"https://www.roblox.com/headshot-thumbnail/image?userId={user_id}&width=150&height=150&format=png"
-
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
-    roster = load_data()
-    return render_template_string(template, roster=roster, session=session)
+    avatars = {u: get_roblox_avatar(u) for u in users}
+    return render_template_string(HTML_TEMPLATE, logged_in=session_state["logged_in"], users=users, avatars=avatars)
 
 @app.route("/login", methods=["POST"])
 def login():
-    if request.form["password"] == ADMIN_PASSWORD:
-        session["admin"] = True
+    if request.form.get("password") == ADMIN_PASSWORD:
+        session_state["logged_in"] = True
     return redirect(url_for("home"))
 
-@app.route("/add", methods=["POST"])
-def add_member():
-    if not session.get("admin"):
-        return redirect(url_for("home"))
-
-    username = request.form["username"]
-    rank = request.form["rank"]
-
-    user_id = get_user_id(username)
-    if user_id:
-        avatar = get_avatar(user_id)
-        roster = load_data()
-        roster.append({"username": username, "rank": rank, "avatar": avatar})
-        save_data(roster)
-
+@app.route("/logout")
+def logout():
+    session_state["logged_in"] = False
     return redirect(url_for("home"))
 
-@app.route("/delete/<username>")
-def delete_member(username):
-    if not session.get("admin"):
-        return redirect(url_for("home"))
+@app.route("/add_user", methods=["POST"])
+def add_user():
+    if session_state["logged_in"]:
+        username = request.form.get("username")
+        rank = request.form.get("rank")
+        if username:
+            users[username] = rank
+    return redirect(url_for("home"))
 
-    roster = load_data()
-    roster = [m for m in roster if m["username"] != username]
-    save_data(roster)
+@app.route("/promote/<username>")
+def promote(username):
+    ranks = ["Patrol", "Sergeant", "Captain"]
+    if username in users:
+        current_rank = users[username]
+        if current_rank in ranks and ranks.index(current_rank) < len(ranks) - 1:
+            users[username] = ranks[ranks.index(current_rank) + 1]
+    return redirect(url_for("home"))
+
+@app.route("/demote/<username>")
+def demote(username):
+    ranks = ["Patrol", "Sergeant", "Captain"]
+    if username in users:
+        current_rank = users[username]
+        if current_rank in ranks and ranks.index(current_rank) > 0:
+            users[username] = ranks[ranks.index(current_rank) - 1]
     return redirect(url_for("home"))
 
 if __name__ == "__main__":
