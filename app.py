@@ -1,108 +1,36 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from admin_tools import get_rank_for_user, set_rank_for_user, promote_user, demote_user, delete_user, add_user
-from avatar_live import get_avatar_url
 
 app = Flask(__name__)
 CORS(app)
 
-# Store player ranks in memory
-player_ranks = {}
+players = {}  # Example structure: {"john": {"score": 10}}
 
-@app.route("/")
-def home():
-    return jsonify({"status": "online", "message": "PNP Rank & Avatar API is running"})
-
-@app.route("/get_rank/<username>", methods=["GET"])
-def get_rank(username):
-    rank = player_ranks.get(username) or get_rank_for_user(username)
-    return jsonify({"username": username, "rank": rank})
-
-@app.route("/set_rank", methods=["POST"])
-def set_rank():
+@app.route("/add_player", methods=["POST"])
+def add_player():
     data = request.json
     username = data.get("username")
-    rank = data.get("rank")
-    if not username or not rank:
-        return jsonify({"error": "username and rank required"}), 400
-    player_ranks[username] = rank
-    set_rank_for_user(username, rank)
-    return jsonify({"message": f"Rank for {username} set to {rank}"})
+    if username in players:
+        return jsonify({"error": "Player already exists"}), 400
+    players[username] = {"score": 0}
+    return jsonify({"message": f"Player {username} added"}), 201
 
-@app.route("/promote/<username>", methods=["POST"])
-def promote(username):
-    result = promote_user(username)
-    return jsonify({"message": result})
-
-@app.route("/demote/<username>", methods=["POST"])
-def demote(username):
-    result = demote_user(username)
-    return jsonify({"message": result})
-
-@app.route("/delete/<username>", methods=["DELETE"])
-def delete(username):
-    result = delete_user(username)
-    return jsonify({"message": result})
-
-@app.route("/add", methods=["POST"])
-def add():
+@app.route("/remove_player", methods=["POST"])
+def remove_player():
     data = request.json
     username = data.get("username")
-    rank = data.get("rank")
-    result = add_user(username, rank)
-    return jsonify({"message": result})
+    if username not in players:
+        return jsonify({"error": "Player not found"}), 404
+    del players[username]
+    return jsonify({"message": f"Player {username} removed"}), 200
 
-@app.route("/avatar/<username>", methods=["GET"])
-def avatar(username):
-    url = get_avatar_url(username)
-    return jsonify({"username": username, "avatar_url": url})
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)        del players[username]
+@app.route("/players", methods=["GET"])
+def list_players():
     return jsonify(players)
 
 if __name__ == "__main__":
-    app.run(debug=True)
-    # Avatar thumbnail endpoint
-    url = (
-        f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
-        f"?userIds={uid}&size={AVATAR_SIZE}&format=Png&isCircular=true"
-    )
-    # No need to call thumbnails API for imageUrl field - thumbnails endpoint returns JSON
-    try:
-        resp = requests.get(url, timeout=6)
-        resp.raise_for_status()
-        j = resp.json()
-        if j.get("data") and len(j["data"]) > 0:
-            img = j["data"][0].get("imageUrl")
-            avatar_set(username, img)
-            return img
-    except Exception:
-        avatar_set(username, None)
-        return None
-    avatar_set(username, None)
-    return None
-
-
-# -------------------------
-# Auth helpers
-# -------------------------
-def admin_required(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if not session.get("is_admin"):
-            return redirect(url_for("login", next=request.path))
-        return func(*args, **kwargs)
-    return wrapper
-
-
-# -------------------------
-# Utility: log admin action in data.json
-# -------------------------
-def log_action(admin, action, details=""):
-    data = read_data()
-    data.setdefault("logs", [])
-    data["logs"].insert(0, {
+    # Always the last line
+    app.run(host="0.0.0.0", port=5000, debug=True)    data["logs"].insert(0, {
         "at": datetime.utcnow().isoformat(),
         "admin": admin,
         "action": action,
