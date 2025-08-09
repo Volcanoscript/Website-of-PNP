@@ -1,30 +1,52 @@
 # app.py
+"""
+Single-file Flask app for Render deployment.
+
+Features:
+- Single Python file (no external templates)
+- Admin login (default username: admin, password: PNP2025; can be overridden by env vars)
+- Full PNP rank list (PNCO + PCO) in the order you requested
+- Add / Promote / Demote / Delete members (by numeric id)
+- Persistent storage to `players.json` (auto-created in the app directory)
+- Live Roblox avatar fetching (username -> userid -> thumbnail) with in-memory cache
+- Admin activity logs saved inside players.json
+- UI (HTML/CSS/JS) embedded inside the file
+- Run with `python app.py` or with Gunicorn via `gunicorn app:app`
+"""
+
 import os
 import json
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from functools import wraps
 
 import requests
 from flask import (
-    Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
+    Flask,
+    render_template_string,
+    request,
+    redirect,
+    url_for,
+    session,
+    flash,
+    jsonify,
 )
 
-# ---------------- CONFIG ----------------
+# ---------------- Configuration ----------------
 APP_DIR = Path(__file__).parent
 DATA_FILE = APP_DIR / "players.json"
-AVATAR_TTL = 60 * 60  # 1 hour
+AVATAR_TTL = int(os.getenv("AVATAR_TTL", 60 * 60))  # seconds, default 1 hour
+AVATAR_CLEAN_INTERVAL = int(os.getenv("AVATAR_CLEAN_INTERVAL", 300))  # seconds
 AVATAR_SIZE = os.getenv("AVATAR_SIZE", "150x150")
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "PNP2025")
 SECRET_KEY = os.getenv("SECRET_KEY") or os.urandom(24)
-
 PORT = int(os.getenv("PORT", 5000))
 
-# PNP ranks (lowest -> highest) in exact order you provided
+# PNP ranks (lowest -> highest) EXACT order provided by you
 PNP_RANKS = [
     "Patrolman/Patrolwoman",
     "Police Corporal",
@@ -41,15 +63,15 @@ PNP_RANKS = [
     "Police Brigadier General",
     "Police Major General",
     "Police Lieutenant General",
-    "Police General"
+    "Police General",
 ]
 
-# ---------------- APP ----------------
+# ---------------- Flask app ----------------
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
-# ---------------- storage (players + logs) ----------------
-_lock = threading.Lock()
+# ---------------- Persistence helpers ----------------
+_data_lock = threading.Lock()
 
 
 def ensure_datafile():
@@ -59,18 +81,18 @@ def ensure_datafile():
 
 def read_data():
     ensure_datafile()
-    with _lock:
-        return json.loads(DATA_FILE.read_text())
+    with _data_lock:
+        return json.loads(DATA_FILE.read_text(encoding="utf-8"))
 
 
-def write_data(data):
-    with _lock:
+def write_data(d):
+    with _data_lock:
         tmp = DATA_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
+        tmp.write_text(json.dumps(d, indent=2), encoding="utf-8")
         tmp.replace(DATA_FILE)
 
 
-# ---------------- avatar caching ----------------
+# ---------------- Avatar cache ----------------
 _avatar_cache = {}
 _avatar_lock = threading.Lock()
 
@@ -93,26 +115,30 @@ def avatar_set(username, url):
 
 def avatar_cleaner():
     while True:
-        time.sleep(300)
+        time.sleep(AVATAR_CLEAN_INTERVAL)
         now = time.time()
         with _avatar_lock:
-            to_rm = [k for k, v in _avatar_cache.items() if v["expiry"] <= now]
-            for k in to_rm:
+            to_del = [k for k, v in _avatar_cache.items() if v["expiry"] <= now]
+            for k in to_del:
                 del _avatar_cache[k]
 
 
+# start cleaner thread
 threading.Thread(target=avatar_cleaner, daemon=True).start()
 
-
 # ---------------- Roblox helpers ----------------
+ROBLOX_USERNAME_ENDPOINT = "https://users.roblox.com/v1/usernames/users"
+ROBLOX_THUMBNAIL_ENDPOINT = "https://thumbnails.roblox.com/v1/users/avatar-headshot"
+
+
 def get_roblox_userid(username):
     if not username:
         return None
     try:
         resp = requests.post(
-            "https://users.roblox.com/v1/usernames/users",
+            ROBLOX_USERNAME_ENDPOINT,
             json={"usernames": [username], "excludeBannedUsers": False},
-            timeout=6
+            timeout=6,
         )
         resp.raise_for_status()
         j = resp.json()
@@ -123,7 +149,8 @@ def get_roblox_userid(username):
     return None
 
 
-def get_roblox_avatar(username):
+def get_roblox_avatar(username, size=AVATAR_SIZE):
+    # cached (can cache None)
     cached = avatar_get(username)
     if cached is not None:
         return cached
@@ -132,11 +159,8 @@ def get_roblox_avatar(username):
         avatar_set(username, None)
         return None
     try:
-        thumb_url = (
-            f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
-            f"?userIds={uid}&size={AVATAR_SIZE}&format=Png&isCircular=true"
-        )
-        resp = requests.get(thumb_url, timeout=6)
+        url = f"{ROBLOX_THUMBNAIL_ENDPOINT}?userIds={uid}&size={size}&format=Png&isCircular=true"
+        resp = requests.get(url, timeout=6)
         resp.raise_for_status()
         j = resp.json()
         if j.get("data") and len(j["data"]) > 0:
@@ -150,26 +174,34 @@ def get_roblox_avatar(username):
     return None
 
 
-# ---------------- auth helpers ----------------
+# ---------------- Auth & logging ----------------
 def admin_required(f):
     @wraps(f)
-    def wrapped(*a, **kw):
+    def wrapper(*a, **kw):
         if not session.get("is_admin"):
             return redirect(url_for("login", next=request.path))
         return f(*a, **kw)
-    return wrapped
+
+    return wrapper
 
 
 def log_action(admin, action, details=""):
     d = read_data()
-    d.setdefault("logs", [])
-    d["logs"].insert(0, {"at": datetime.utcnow().isoformat(), "admin": admin, "action": action, "details": details})
-    d["logs"] = d["logs"][:500]
+    logs = d.setdefault("logs", [])
+    logs.insert(
+        0,
+        {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "admin": admin,
+            "action": action,
+            "details": details,
+        },
+    )
+    d["logs"] = logs[:500]
     write_data(d)
 
 
-# ---------------- UI Template (single-file) ----------------
-# This is the full site HTML (keeps your dark UI look). We use render_template_string.
+# ---------------- Single-file UI template ----------------
 SITE_HTML = r"""
 <!doctype html>
 <html>
@@ -246,10 +278,10 @@ SITE_HTML = r"""
 
           {% if is_admin %}
             <div class="controls">
-              <form class="inline" method="post" action="{{ url_for('promote', member_id=m.id) }}">
+              <form class="inline" method="post" action="{{ url_for('promote_member', member_id=m.id) }}">
                 <button class="btn btn-primary" type="submit">Promote</button>
               </form>
-              <form class="inline" method="post" action="{{ url_for('demote', member_id=m.id) }}">
+              <form class="inline" method="post" action="{{ url_for('demote_member', member_id=m.id) }}">
                 <button class="btn btn-ghost" type="submit">Demote</button>
               </form>
               <form class="inline" method="post" action="{{ url_for('delete_member', member_id=m.id) }}" onsubmit="return confirm('Delete {{ m.username }}?')">
@@ -285,6 +317,7 @@ SITE_HTML = r"""
     </section>
     {% endif %}
 
+    <div style="margin-top:18px;color:#999">Note: avatars fetched from Roblox. Data saved in <code>players.json</code>.</div>
   </div>
 
 <script>
@@ -301,33 +334,37 @@ function filter(){
 </html>
 """
 
-# ---------------- routes ----------------
+# ---------------- Routes ----------------
 @app.route("/")
 def index():
     d = read_data()
-    members = d.get("members", [])
-    rendered = []
-    for m in members:
+    members_raw = d.get("members", [])
+    members = []
+    for m in members_raw:
         ri = int(m.get("rank_index", 0))
-        rendered.append({
-            "id": int(m.get("id")),
-            "username": m.get("username"),
-            "rank_index": ri,
-            "rank": PNP_RANKS[ri] if 0 <= ri < len(PNP_RANKS) else "Unknown",
-            "avatar": get_roblox_avatar(m.get("username")) or None,
-            "created_at": m.get("created_at")
-        })
-    return render_template_string(SITE_HTML,
-                                  members=rendered,
-                                  ranks=PNP_RANKS,
-                                  is_admin=bool(session.get("is_admin")),
-                                  logs=d.get("logs", []))
+        members.append(
+            {
+                "id": int(m.get("id")),
+                "username": m.get("username"),
+                "rank_index": ri,
+                "rank": PNP_RANKS[ri] if 0 <= ri < len(PNP_RANKS) else "Unknown",
+                "avatar": get_roblox_avatar(m.get("username")) or None,
+                "created_at": m.get("created_at"),
+            }
+        )
+    return render_template_string(
+        SITE_HTML,
+        members=members,
+        ranks=PNP_RANKS,
+        is_admin=bool(session.get("is_admin")),
+        logs=d.get("logs", []),
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        u = request.form.get("username", "").strip()
+        u = (request.form.get("username") or "").strip()
         p = request.form.get("password", "")
         if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
             session["is_admin"] = True
@@ -335,20 +372,19 @@ def login():
             log_action(u, "login", "admin logged in")
             return redirect(request.args.get("next") or url_for("index"))
         flash("Invalid credentials", "error")
-        return render_template_string("""
-            <p>Invalid credentials. <a href="{{ url_for('index') }}">Back</a></p>
-        """)
-    # simple login form
-    return render_template_string("""
-      <div style="max-width:360px;margin:40px auto;padding:20px;background:#0f0f0f;border-radius:8px;color:#fff">
-        <h2>Admin Login</h2>
-        <form method="post">
-          <input name="username" placeholder="username" required style="width:100%;padding:8px;margin:6px 0">
-          <input name="password" type="password" placeholder="password" required style="width:100%;padding:8px;margin:6px 0">
-          <button style="padding:8px 12px">Login</button>
-        </form>
-      </div>
-    """)
+        return render_template_string(
+            "<div style='max-width:420px;margin:40px auto;padding:20px;background:#0f0f0f;border-radius:8px;color:#fff'>"
+            "<p style='color:#ff7b7b'>Invalid credentials</p><p><a href='{{ url_for(\"index\") }}'>Back</a></p></div>"
+        )
+    return render_template_string(
+        "<div style='max-width:420px;margin:40px auto;padding:20px;background:#0f0f0f;border-radius:8px;color:#fff'>"
+        "<h2>Admin Login</h2>"
+        "<form method='post'>"
+        "<input name='username' placeholder='username' required style='width:100%;padding:8px;margin:6px 0'>"
+        "<input name='password' type='password' placeholder='password' required style='width:100%;padding:8px;margin:6px 0'>"
+        "<button style='padding:8px 12px'>Login</button>"
+        "</form></div>"
+    )
 
 
 @app.route("/logout")
@@ -371,16 +407,24 @@ def add_member():
     if not username:
         flash("Username required", "error")
         return redirect(url_for("index"))
-    data = read_data()
-    members = data.setdefault("members", [])
-    if any(m["username"].lower() == username.lower() for m in members):
+    d = read_data()
+    members = d.setdefault("members", [])
+    if any(x["username"].lower() == username.lower() for x in members):
         flash("Username already exists", "error")
         return redirect(url_for("index"))
     new_id = max((m.get("id", 0) for m in members), default=0) + 1
-    now = datetime.utcnow().isoformat()
-    members.append({"id": new_id, "username": username, "rank_index": max(0, min(rank_index, len(PNP_RANKS)-1)), "created_at": now})
-    write_data(data)
+    now = datetime.now(timezone.utc).isoformat()
+    members.append(
+        {
+            "id": new_id,
+            "username": username,
+            "rank_index": max(0, min(rank_index, len(PNP_RANKS) - 1)),
+            "created_at": now,
+        }
+    )
+    write_data(d)
     log_action(session.get("admin_user", "admin"), "add", f"{username} -> {PNP_RANKS[rank_index]}")
+    # fetch avatar async so UI isn't blocked
     threading.Thread(target=get_roblox_avatar, args=(username,), daemon=True).start()
     return redirect(url_for("index"))
 
@@ -388,15 +432,15 @@ def add_member():
 @app.route("/delete/<int:member_id>", methods=["POST"])
 @admin_required
 def delete_member(member_id):
-    data = read_data()
-    members = data.get("members", [])
+    d = read_data()
+    members = d.get("members", [])
     m = next((x for x in members if int(x.get("id")) == int(member_id)), None)
     if not m:
         flash("Member not found", "error")
         return redirect(url_for("index"))
     members = [x for x in members if int(x.get("id")) != int(member_id)]
-    data["members"] = members
-    write_data(data)
+    d["members"] = members
+    write_data(d)
     log_action(session.get("admin_user", "admin"), "delete", m.get("username"))
     return redirect(url_for("index"))
 
@@ -404,8 +448,8 @@ def delete_member(member_id):
 @app.route("/promote/<int:member_id>", methods=["POST"])
 @admin_required
 def promote_member(member_id):
-    data = read_data()
-    members = data.get("members", [])
+    d = read_data()
+    members = d.get("members", [])
     m = next((x for x in members if int(x.get("id")) == int(member_id)), None)
     if not m:
         flash("Member not found", "error")
@@ -415,7 +459,7 @@ def promote_member(member_id):
         flash("Already at highest rank", "info")
         return redirect(url_for("index"))
     m["rank_index"] = cur + 1
-    write_data(data)
+    write_data(d)
     log_action(session.get("admin_user", "admin"), "promote", f"{m.get('username')} -> {PNP_RANKS[m['rank_index']]}")
     return redirect(url_for("index"))
 
@@ -423,8 +467,8 @@ def promote_member(member_id):
 @app.route("/demote/<int:member_id>", methods=["POST"])
 @admin_required
 def demote_member(member_id):
-    data = read_data()
-    members = data.get("members", [])
+    d = read_data()
+    members = d.get("members", [])
     m = next((x for x in members if int(x.get("id")) == int(member_id)), None)
     if not m:
         flash("Member not found", "error")
@@ -434,7 +478,7 @@ def demote_member(member_id):
         flash("Already at lowest rank", "info")
         return redirect(url_for("index"))
     m["rank_index"] = cur - 1
-    write_data(data)
+    write_data(d)
     log_action(session.get("admin_user", "admin"), "demote", f"{m.get('username')} -> {PNP_RANKS[m['rank_index']]}")
     return redirect(url_for("index"))
 
@@ -445,27 +489,30 @@ def api_roster():
     out = []
     for m in d.get("members", []):
         ri = int(m.get("rank_index", 0))
-        out.append({
-            "id": m.get("id"),
-            "username": m.get("username"),
-            "rank_index": ri,
-            "rank": PNP_RANKS[ri] if 0 <= ri < len(PNP_RANKS) else "Unknown",
-            "avatar": get_roblox_avatar(m.get("username")),
-            "created_at": m.get("created_at")
-        })
+        out.append(
+            {
+                "id": m.get("id"),
+                "username": m.get("username"),
+                "rank_index": ri,
+                "rank": PNP_RANKS[ri] if 0 <= ri < len(PNP_RANKS) else "Unknown",
+                "avatar": get_roblox_avatar(m.get("username")),
+                "created_at": m.get("created_at"),
+            }
+        )
     return jsonify(out)
 
 
-# ---------- seed file if missing ----------
+# ---------------- seed default data if empty ----------------
 with app.app_context():
     ensure_datafile()
-    data = read_data()
-    if not data.get("members"):
-        now = datetime.utcnow().isoformat()
-        data["members"] = [{"id": 1, "username": "Roblox", "rank_index": 11, "created_at": now}]
-        write_data(data)
+    d = read_data()
+    if not d.get("members"):
+        now = datetime.now(timezone.utc).isoformat()
+        d["members"] = [{"id": 1, "username": "Roblox", "rank_index": 11, "created_at": now}]
+        write_data(d)
 
-# ---------- run ----------
+# ---------------- run ----------------
 if __name__ == "__main__":
     print(f"Starting app on 0.0.0.0:{PORT} (admin: {ADMIN_USERNAME})")
+    # If deploying on Render, prefer running via gunicorn: `gunicorn app:app`
     app.run(host="0.0.0.0", port=PORT, debug=False)
