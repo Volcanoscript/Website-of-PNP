@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PNP Rank System</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>PNP Rank System</h1>
+
+    <div id="admin-login">
+        <h3>Admin Login</h3>
+        <input type="text" id="admin-user" placeholder="Username">
+        <input type="password" id="admin-pass" placeholder="Password">
+        <button onclick="loginAdmin()">Login</button>
+        <p id="login-msg"></p>
+    </div>
+
+    <div id="admin-panel" style="display:none;">
+        <h3>Add Player</h3>
+        <input type="text" id="player-name" placeholder="Roblox Username">
+        <select id="player-rank"></select>
+        <button onclick="addPlayer()">Add</button>
+
+        <h3>Players</h3>
+        <div id="players-list"></div>
+    </div>
+
+    <script>
+        const ranks = {{ ranks | tojson }};
+        const rankSelect = document.getElementById("player-rank");
+        ranks.forEach(r => {
+            let opt = document.createElement("option");
+            opt.value = r;
+            opt.textContent = r;
+            rankSelect.appendChild(opt);
+        });
+
+        let isAdmin = false;
+
+        function loginAdmin() {
+            fetch("/login", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    username: document.getElementById("admin-user").value,
+                    password: document.getElementById("admin-pass").value
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    isAdmin = true;
+                    document.getElementById("admin-panel").style.display = "block";
+                    document.getElementById("admin-login").style.display = "none";
+                } else {
+                    document.getElementById("login-msg").textContent = data.message;
+                }
+            });
+        }
+
+        function addPlayer() {
+            fetch("/add_player", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    username: document.getElementById("player-name").value,
+                    rank: document.getElementById("player-rank").value
+                })
+            })
+            .then(res => res.json())
+            .then(data => updatePlayers(data.players));
+        }
+
+        function promote(username) {
+            fetch("/promote", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({username})
+            })
+            .then(res => res.json())
+            .then(updatePlayers);
+        }
+
+        function demote(username) {
+            fetch("/demote", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({username})
+            })
+            .then(res => res.json())
+            .then(updatePlayers);
+        }
+
+        function deletePlayer(username) {
+            fetch("/delete", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({username})
+            })
+            .then(res => res.json())
+            .then(updatePlayers);
+        }
+
+        function updatePlayers(players) {
+            let list = document.getElementById("players-list");
+            list.innerHTML = "";
+            for (let username in players) {
+                let p = players[username];
+                list.innerHTML += `
+                    <div class="player-card">
+                        <img src="${p.avatar_url}" alt="avatar">
+                        <h4>${username}</h4>
+                        <p>${p.rank}</p>
+                        <button onclick="promote('${username}')">Promote</button>
+                        <button onclick="demote('${username}')">Demote</button>
+                        <button onclick="deletePlayer('${username}')">Delete</button>
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>
