@@ -28,6 +28,19 @@ from flask import (
     render_template_string,
     jsonify,
 )
+# ---------- MongoDB Database ----------
+import os
+from pymongo import MongoClient
+
+# Get your MongoDB URI from environment variables
+MONGO_URI = os.getenv("MONGO_URI")
+
+# Connect to MongoDB
+client = MongoClient(MONGO_URI)
+
+# Select your database and collection
+db = client["myDatabase"]          # Replace "myDatabase" with your database name
+collection = db["test_collection"] # Replace "test_collection" with your collection name
 
 # ---------- Configuration ----------
 APP_DIR = Path(__file__).parent
