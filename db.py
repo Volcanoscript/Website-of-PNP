@@ -1,19 +1,20 @@
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import json
+import psycopg
+from pathlib import Path
 from datetime import datetime
 
-DATABASE_URL = os.getenv("postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a.oregon-postgres.render.com/pnp_website_database")
+APP_DIR = Path(__file__).parent
+DATA_FILE = APP_DIR / "players.json"
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a/pnp_website_database"
 
 def ensure_tables():
-    with get_conn() as conn:
+    with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS members (
-                    id SERIAL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY,
                     username TEXT UNIQUE NOT NULL,
                     rank_index INTEGER NOT NULL,
                     created_at TIMESTAMP NOT NULL
@@ -30,45 +31,70 @@ def ensure_tables():
             """)
             conn.commit()
 
-def get_all_members():
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM members ORDER BY id ASC;")
-            return cur.fetchall()
+def load_json():
+    if not DATA_FILE.exists():
+        print("players.json not found!")
+        return None
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def add_member(username, rank_index, created_at):
-    with get_conn() as conn:
+def parse_iso8601(dt_str):
+    try:
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def sync_members(members):
+    with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO members (username, rank_index, created_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (username) DO NOTHING;
-            """, (username, rank_index, created_at))
+            data = []
+            for m in members:
+                created_at = parse_iso8601(m.get("created_at")) or datetime.utcnow()
+                data.append((
+                    m.get("id"),
+                    m.get("username"),
+                    m.get("rank_index", 0),
+                    created_at,
+                ))
+
+            sql = """
+            INSERT INTO members (id, username, rank_index, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                username = EXCLUDED.username,
+                rank_index = EXCLUDED.rank_index,
+                created_at = EXCLUDED.created_at;
+            """
+            cur.executemany(sql, data)
             conn.commit()
+    print(f"Synced {len(members)} members.")
 
-def update_member_rank(member_id, new_rank_index):
-    with get_conn() as conn:
+def sync_logs(logs):
+    if not logs:
+        return
+    with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE members SET rank_index = %s WHERE id = %s;", (new_rank_index, member_id))
-            conn.commit()
+            cur.execute("SELECT at, admin, action, details FROM logs;")
+            existing = set(cur.fetchall())
 
-def delete_member(member_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM members WHERE id = %s;", (member_id,))
-            conn.commit()
+            data = []
+            for log in logs:
+                at = parse_iso8601(log.get("at"))
+                admin = log.get("admin", "")
+                action = log.get("action", "")
+                details = log.get("details", "")
+                key = (at, admin, action, details)
+                if key not in existing:
+                    data.append((at, admin, action, details))
+                    existing.add(key)
 
-def log_action(at, admin, action, details=None):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
+            if data:
+                sql = """
                 INSERT INTO logs (at, admin, action, details)
-                VALUES (%s, %s, %s, %s);
-            """, (at, admin, action, details))
-            conn.commit()
-
-def get_logs(limit=500):
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM logs ORDER BY at DESC LIMIT %s;", (limit,))
-            return cur.fetchall()
+                VALUES (%s, %s, %s, %s)
+                """
+                cur.executemany(sql, data)
+                conn.commit()
+                print(f"Synced {len(data)} new logs.")
+            else:
+                print("No new logs to sync.")
