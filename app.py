@@ -484,30 +484,40 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)
 
 # ----------- database -------------
-import db
+from flask import Flask, request, redirect, url_for, session
+import db  # Your separate db.py module for DB functions
 from datetime import datetime, timezone
 
-# Make sure tables exist before first request
-@app.before_first_request
-def setup_db():
-    db.ensure_tables()
+app = Flask(__name__)
+app.secret_key = "your_secret_key_here"  # Needed if you use sessions
+
+# Immediately ensure tables exist right after app creation
+db.ensure_tables()
 
 @app.route("/")
 def index():
     members = db.get_all_members()
-    # Your existing code to render members and avatars...
+    # You can format timestamps, fetch avatars, etc.
+    return "Member count: " + str(len(members))
 
 @app.route("/add", methods=["POST"])
-@admin_required
-def add_member_route():
+def add_member():
     username = (request.form.get("username") or "").strip()
     try:
         rank_index = int(request.form.get("rank_index", 0))
     except Exception:
         rank_index = 0
+
     if not username:
         return redirect(url_for("index"))
+
     created_at = datetime.now(timezone.utc)
     db.add_member(username, rank_index, created_at)
-    db.log_action(created_at, session.get("admin_user", "admin"), "add", f"{username} -> {PNP_RANKS[rank_index]}")
+
+    admin_user = session.get("admin_user", "admin")  # Adjust if you have admin login
+    db.log_action(created_at, admin_user, "add", f"{username} -> Rank {rank_index}")
+
     return redirect(url_for("index"))
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
