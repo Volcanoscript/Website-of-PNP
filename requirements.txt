@@ -1,4 +1,4 @@
-psycopg[binary]==3.1.12
+psycopg[binary]
 Flask
 requests
 gunicorn
