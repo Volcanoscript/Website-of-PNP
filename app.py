@@ -488,7 +488,7 @@ import os
 import psycopg2
 
 # Get the DATABASE_URL from environment variables
-DATABASE_URL = os.environ.get("postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a.oregon-postgres.render.com/pnp_website_database")
+DATABASE_URL = os.environ.get("postgres://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a:5432/pnp_website_database_user")
 
 if not DATABASE_URL:
     raise Exception("DATABASE_URL environment variable is not set")
