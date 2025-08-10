@@ -1,4 +1,3 @@
-
 # app.py
 """
 Single-file PNP roster app ready for Render.com.
@@ -482,19 +481,3 @@ if __name__ == "__main__":
     print(f"Starting app on 0.0.0.0:{PORT} (admin: {ADMIN_USERNAME})")
     # For Render prefer start command: "gunicorn app:app"
     app.run(host="0.0.0.0", port=PORT, debug=False)
-
-# ----------- database -------------
-import os
-import psycopg2
-
-# Get the DATABASE_URL from environment variables
-DATABASE_URL = os.environ.get("postgres://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a:5432/pnp_website_database_user")
-
-if not DATABASE_URL:
-    raise Exception("DATABASE_URL environment variable is not set")
-
-# Connect to the external PostgreSQL database using the URL
-conn = psycopg2.connect(DATABASE_URL)
-
-# Now you can use `conn` to work with your database
-
