@@ -484,40 +484,110 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)
 
 # ----------- database -------------
-from flask import Flask, request, redirect, url_for, session
-import db  # Your separate db.py module for DB functions
+from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify
+import threading
+import time
 from datetime import datetime, timezone
+from functools import wraps
+import requests
+
+import db  # <-- our new database module
 
 app = Flask(__name__)
-app.secret_key = "your_secret_key_here"  # Needed if you use sessions
+app.secret_key = SECRET_KEY
 
-# Immediately ensure tables exist right after app creation
-db.ensure_tables()
+# Your PNP_RANKS and other constants remain same
+# ...
+
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("is_admin"):
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return wrapper
+
 
 @app.route("/")
 def index():
-    members = db.get_all_members()
-    # You can format timestamps, fetch avatars, etc.
-    return "Member count: " + str(len(members))
+    members_db = db.get_members()
+    members = []
+    for m in members_db:
+        ri = m.get("rank_index", 0)
+        members.append(
+            {
+                "id": m.get("id"),
+                "username": m.get("username"),
+                "rank_index": ri,
+                "rank": PNP_RANKS[ri] if 0 <= ri < len(PNP_RANKS) else "Unknown",
+                "avatar": get_roblox_avatar(m.get("username")),
+                "created_at": m.get("created_at").isoformat() if m.get("created_at") else None,
+            }
+        )
+    logs = db.get_logs()
+    return render_template_string(
+        MAIN_HTML,
+        members=members,
+        ranks=PNP_RANKS,
+        is_admin=bool(session.get("is_admin")),
+        admin_user=session.get("admin_user"),
+        logs=logs,
+        avatar_ttl=AVATAR_TTL,
+    )
 
 @app.route("/add", methods=["POST"])
+@admin_required
 def add_member():
     username = (request.form.get("username") or "").strip()
     try:
         rank_index = int(request.form.get("rank_index", 0))
     except Exception:
         rank_index = 0
-
     if not username:
         return redirect(url_for("index"))
-
-    created_at = datetime.now(timezone.utc)
-    db.add_member(username, rank_index, created_at)
-
-    admin_user = session.get("admin_user", "admin")  # Adjust if you have admin login
-    db.log_action(created_at, admin_user, "add", f"{username} -> Rank {rank_index}")
-
+    # Add to DB
+    new_id = db.add_member(username, max(0, min(rank_index, len(PNP_RANKS) - 1)))
+    if new_id:
+        db.log_action(session.get("admin_user", "admin"), "add", f"{username} -> {PNP_RANKS[rank_index]}")
+        threading.Thread(target=get_roblox_avatar, args=(username,), daemon=True).start()
     return redirect(url_for("index"))
 
+@app.route("/delete/<int:member_id>", methods=["POST"])
+@admin_required
+def delete_member(member_id):
+    db.delete_member(member_id)
+    db.log_action(session.get("admin_user", "admin"), "delete", f"Member ID {member_id}")
+    return redirect(url_for("index"))
+
+@app.route("/promote/<int:member_id>", methods=["POST"])
+@admin_required
+def promote_member(member_id):
+    members = db.get_members()
+    member = next((m for m in members if m["id"] == member_id), None)
+    if member:
+        cur_rank = member.get("rank_index", 0)
+        if cur_rank < len(PNP_RANKS) - 1:
+            new_rank = cur_rank + 1
+            db.update_member_rank(member_id, new_rank)
+            db.log_action(session.get("admin_user", "admin"), "promote", f"{member['username']} -> {PNP_RANKS[new_rank]}")
+    return redirect(url_for("index"))
+
+@app.route("/demote/<int:member_id>", methods=["POST"])
+@admin_required
+def demote_member(member_id):
+    members = db.get_members()
+    member = next((m for m in members if m["id"] == member_id), None)
+    if member:
+        cur_rank = member.get("rank_index", 0)
+        if cur_rank > 0:
+            new_rank = cur_rank - 1
+            db.update_member_rank(member_id, new_rank)
+            db.log_action(session.get("admin_user", "admin"), "demote", f"{member['username']} -> {PNP_RANKS[new_rank]}")
+    return redirect(url_for("index"))
+
+# ... rest of your app.py remains the same
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    print(f"Starting app on 0.0.0.0:{PORT} (admin: {ADMIN_USERNAME})")
+    db.init_db()  # create tables if missing
+    app.run(host="0.0.0.0", port=PORT, debug=False)
