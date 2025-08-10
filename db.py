@@ -3,7 +3,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from datetime import datetime
 
-DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a.oregon-postgres.render.com/pnp_website_database"
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a/pnp_website_database"
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -55,4 +55,5 @@ def log_action(at, admin, action, details):
             cur.execute("""
                 INSERT INTO logs (at, admin, action, details)
                 VALUES (%s, %s, %s, %s);
-            """, (at, admin, ac
+            """, (at, admin, action, details))
+        conn.commit()
