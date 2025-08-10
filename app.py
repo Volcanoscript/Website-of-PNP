@@ -482,3 +482,31 @@ if __name__ == "__main__":
     print(f"Starting app on 0.0.0.0:{PORT} (admin: {ADMIN_USERNAME})")
     # For Render prefer start command: "gunicorn app:app"
     app.run(host="0.0.0.0", port=PORT, debug=False)
+
+# ----------- database -------------
+import db
+from datetime import datetime, timezone
+
+# Replace ensure_datafile and read_data calls
+db.ensure_tables()
+
+@app.route("/")
+def index():
+    members = db.get_all_members()
+    # convert timestamps, get avatars etc.
+    # ...
+
+@app.route("/add", methods=["POST"])
+@admin_required
+def add_member():
+    username = (request.form.get("username") or "").strip()
+    try:
+        rank_index = int(request.form.get("rank_index", 0))
+    except Exception:
+        rank_index = 0
+    if not username:
+        return redirect(url_for("index"))
+    created_at = datetime.now(timezone.utc)
+    db.add_member(username, rank_index, created_at)
+    db.log_action(created_at, session.get("admin_user", "admin"), "add", f"{username} -> {PNP_RANKS[rank_index]}")
+    # ...
