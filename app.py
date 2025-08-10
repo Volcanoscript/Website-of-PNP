@@ -922,5 +922,6 @@ def api_roster():
 
 # ---------- Start ----------
 if __name__ == "__main__":
-    print(f"Starting app on 0.0.0.0:{PORT} using DB: {DATABASE_URL}")
+    print(f"Starting app on 0.0.0.0:{PORT} (admin: {ADMIN_USERNAME})")
+    # For Render prefer start command: "gunicorn app:app"
     app.run(host="0.0.0.0", port=PORT, debug=False)
