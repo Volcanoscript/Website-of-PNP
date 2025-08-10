@@ -487,6 +487,14 @@ if __name__ == "__main__":
 import os
 import psycopg2
 
-DATABASE_URL = os.getenv("postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a.oregon-postgres.render.com/pnp_website_database")
+# Get the DATABASE_URL from environment variables
+DATABASE_URL = os.environ.get("postgresql://pnp_website_database_user:JgSW6mMvhBVernIALTJpR296LMPIlme9@dpg-d2bu4bp5pdvs73d4lmd0-a.oregon-postgres.render.com/pnp_website_database")
 
+if not DATABASE_URL:
+    raise Exception("DATABASE_URL environment variable is not set")
+
+# Connect to the external PostgreSQL database using the URL
 conn = psycopg2.connect(DATABASE_URL)
+
+# Now you can use `conn` to work with your database
+
